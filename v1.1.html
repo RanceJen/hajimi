@@ -4,6 +4,244 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script>
+    // v2o raw-text helper:
+    // Capture the *original* model content returned from the backend (including tags),
+    // and expose a small UI to view/edit it without touching the bundled app code.
+    (() => {
+      const state = (window.__V2O_RAW_TEXT__ = window.__V2O_RAW_TEXT__ ?? {
+        enabled: true,
+        lastCapturedRawText: "",
+        lastRawText: "",
+        lastRawJson: null,
+        lastUpdatedAt: 0,
+      });
+
+      const notify = () => {
+        try {
+          window.dispatchEvent(new CustomEvent("v2o:raw-update", { detail: { ...state } }));
+        } catch {
+          // ignore
+        }
+      };
+
+      const extractContentFromJson = (json) => {
+        try {
+          // OpenAI-ish: { choices: [ { message: { content } } ] }
+          const c0 = Array.isArray(json?.choices) ? json.choices[0] : null;
+          const candidate =
+            c0?.message?.content ??
+            c0?.delta?.content ??
+            c0?.text ??
+            json?.message?.content ??
+            json?.content ??
+            json?.raw ??
+            json?.text ??
+            null;
+          if (typeof candidate === "string") return candidate;
+          if (candidate != null) return JSON.stringify(candidate, null, 2);
+          return null;
+        } catch {
+          return null;
+        }
+      };
+
+      const cloneAndCapture = async (res) => {
+        try {
+          if (!state.enabled) return;
+          const ct = (res.headers.get("content-type") || "").toLowerCase();
+
+          // Streaming responses are harder to capture safely here; skip to avoid breaking the app.
+          if (ct.includes("text/event-stream")) return;
+
+          if (ct.includes("application/json")) {
+            const json = await res.clone().json();
+            state.lastRawJson = json;
+            const content = extractContentFromJson(json);
+            if (typeof content === "string") {
+              const prevCaptured = state.lastCapturedRawText;
+              state.lastCapturedRawText = content;
+              // If user hasn't edited (raw == last captured), keep lastRawText synced.
+              if (!state.lastRawText || state.lastRawText === prevCaptured) state.lastRawText = content;
+              state.lastUpdatedAt = Date.now();
+              notify();
+            }
+            return;
+          }
+
+          // Fallback for plain text payloads.
+          if (ct.includes("text/plain")) {
+            const text = await res.clone().text();
+            if (typeof text === "string" && text.length) {
+              const prevCaptured = state.lastCapturedRawText;
+              state.lastCapturedRawText = text;
+              if (!state.lastRawText || state.lastRawText === prevCaptured) state.lastRawText = text;
+              state.lastUpdatedAt = Date.now();
+              notify();
+            }
+          }
+        } catch {
+          // ignore capture failures
+        }
+      };
+
+      const originalFetch = window.fetch;
+      if (typeof originalFetch === "function" && !originalFetch.__v2oRawPatched) {
+        const wrappedFetch = async (input, init) => {
+          const res = await originalFetch(input, init);
+          // fire-and-forget; do not block app flow
+          cloneAndCapture(res);
+          return res;
+        };
+        wrappedFetch.__v2oRawPatched = true;
+        window.fetch = wrappedFetch;
+      }
+    })();
+  </script>
+
+  <style>
+    /* v2o raw-text panel (injected, independent from bundled app) */
+    #v2o-rawtext-fab {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 9999;
+      padding: 10px 12px;
+      border-radius: 999px;
+      border: 2px dashed #b4c6e7;
+      background: rgba(254, 254, 254, 0.92);
+      color: #2d2d2d;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
+    }
+    #v2o-rawtext-fab:hover {
+      background: rgba(246, 248, 252, 0.96);
+      transform: translateY(-1px);
+    }
+    #v2o-rawtext-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(0, 0, 0, 0.22);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    #v2o-rawtext-overlay[data-open="true"] {
+      display: flex;
+    }
+    #v2o-rawtext-dialog {
+      width: min(980px, calc(100vw - 32px));
+      height: min(72vh, 720px);
+      background: rgba(254, 254, 254, 0.96);
+      border: 3px solid #f8bbd9;
+      border-radius: 18px;
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.22);
+      display: flex;
+      flex-direction: column;
+    }
+    #v2o-rawtext-dialog:before {
+      content: "";
+      position: absolute;
+      inset: 8px;
+      border: 2px dashed #fce8f0;
+      border-radius: 12px;
+      pointer-events: none;
+    }
+    .v2o-rawtext-header {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 2px dashed #b4c6e7;
+      background: rgba(255, 252, 248, 0.88);
+    }
+    .v2o-rawtext-title {
+      font-weight: 900;
+      font-size: 14px;
+      letter-spacing: 0.06em;
+      color: #2d2d2d;
+    }
+    #v2o-rawtext-close {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      border: 2px dashed #b4c6e7;
+      background: rgba(246, 248, 252, 0.9);
+      color: #2d2d2d;
+      font-weight: 900;
+    }
+    #v2o-rawtext-close:hover {
+      background: rgba(230, 238, 251, 0.95);
+      transform: translateY(-1px);
+    }
+    #v2o-rawtext-area {
+      position: relative;
+      z-index: 1;
+      flex: 1;
+      width: calc(100% - 28px);
+      margin: 12px 14px 10px;
+      padding: 12px 12px;
+      border: 2px dashed #a8d5ba;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.92);
+      color: #2d2d2d;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+        "Courier New", monospace;
+      font-size: 12.5px;
+      line-height: 1.55;
+      resize: none;
+      outline: none;
+    }
+    .v2o-rawtext-actions {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      padding: 0 14px 12px;
+      flex-wrap: wrap;
+    }
+    .v2o-rawtext-btn {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 2px dashed #b4c6e7;
+      background: rgba(246, 248, 252, 0.92);
+      color: #2d2d2d;
+      font-weight: 800;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      transition: transform 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+    }
+    .v2o-rawtext-btn:hover {
+      background: rgba(230, 238, 251, 0.95);
+      transform: translateY(-1px);
+    }
+    .v2o-rawtext-btn--primary {
+      border-color: #f8bbd9;
+      background: rgba(248, 187, 217, 0.75);
+    }
+    .v2o-rawtext-btn--primary:hover {
+      background: rgba(245, 158, 200, 0.75);
+      border-color: #f59ec8;
+    }
+    .v2o-rawtext-hint {
+      position: relative;
+      z-index: 1;
+      padding: 0 14px 14px;
+      font-size: 12px;
+      color: #6b6862;
+    }
+  </style>
   <script type="module" crossorigin>const vg=(function(){const n=typeof document<"u"&&document.createElement("link").relList;return n&&n.supports&&n.supports("modulepreload")?"modulepreload":"preload"})(),xg=function(r,n){return new URL(r,n).href},lf={},wg=function(n,s,o){let a=Promise.resolve();if(s&&s.length>0){let g=function(y){return Promise.all(y.map(v=>Promise.resolve(v).then(w=>({status:"fulfilled",value:w}),w=>({status:"rejected",reason:w}))))};const f=document.getElementsByTagName("link"),c=document.querySelector("meta[property=csp-nonce]"),p=c?.nonce||c?.getAttribute("nonce");a=g(s.map(y=>{if(y=xg(y,o),y in lf)return;lf[y]=!0;const v=y.endsWith(".css"),w=v?'[rel="stylesheet"]':"";if(o)for(let k=f.length-1;k>=0;k--){const E=f[k];if(E.href===y&&(!v||E.rel==="stylesheet"))return}else if(document.querySelector(`link[href="${y}"]${w}`))return;const S=document.createElement("link");if(S.rel=v?"stylesheet":vg,v||(S.as="script"),S.crossOrigin="",S.href=y,p&&S.setAttribute("nonce",p),document.head.appendChild(S),v)return new Promise((k,E)=>{S.addEventListener("load",k),S.addEventListener("error",()=>E(new Error(`Unable to preload CSS for ${y}`)))})}))}function u(f){const c=new Event("vite:preloadError",{cancelable:!0});if(c.payload=f,window.dispatchEvent(c),!c.defaultPrevented)throw f}return a.then(f=>{for(const c of f||[])c.status==="rejected"&&u(c.reason);return n().catch(u)})},bg=globalThis.__reactReady??Promise.resolve(),kg=globalThis.__hostReady??Promise.resolve(),gp=Promise.all([bg,kg]).then(()=>{});function yp(r){return r&&r.__esModule&&Object.prototype.hasOwnProperty.call(r,"default")?r.default:r}var Ml={exports:{}},Ys={},Pl={exports:{}},Oe={};var cf;function Sg(){if(cf)return Oe;cf=1;var r=Symbol.for("react.element"),n=Symbol.for("react.portal"),s=Symbol.for("react.fragment"),o=Symbol.for("react.strict_mode"),a=Symbol.for("react.profiler"),u=Symbol.for("react.provider"),f=Symbol.for("react.context"),c=Symbol.for("react.forward_ref"),p=Symbol.for("react.suspense"),g=Symbol.for("react.memo"),y=Symbol.for("react.lazy"),v=Symbol.iterator;function w(P){return P===null||typeof P!="object"?null:(P=v&&P[v]||P["@@iterator"],typeof P=="function"?P:null)}var S={isMounted:function(){return!1},enqueueForceUpdate:function(){},enqueueReplaceState:function(){},enqueueSetState:function(){}},k=Object.assign,E={};function C(P,_,B){this.props=P,this.context=_,this.refs=E,this.updater=B||S}C.prototype.isReactComponent={},C.prototype.setState=function(P,_){if(typeof P!="object"&&typeof P!="function"&&P!=null)throw Error("setState(...): takes an object of state variables to update or a function which returns an object of state variables.");this.updater.enqueueSetState(this,P,_,"setState")},C.prototype.forceUpdate=function(P){this.updater.enqueueForceUpdate(this,P,"forceUpdate")};function I(){}I.prototype=C.prototype;function b(P,_,B){this.props=P,this.context=_,this.refs=E,this.updater=B||S}var M=b.prototype=new I;M.constructor=b,k(M,C.prototype),M.isPureReactComponent=!0;var D=Array.isArray,L=Object.prototype.hasOwnProperty,F={current:null},H={key:!0,ref:!0,__self:!0,__source:!0};function q(P,_,B){var X,J={},ne=null,se=null;if(_!=null)for(X in _.ref!==void 0&&(se=_.ref),_.key!==void 0&&(ne=""+_.key),_)L.call(_,X)&&!H.hasOwnProperty(X)&&(J[X]=_[X]);var pe=arguments.length-2;if(pe===1)J.children=B;else if(1<pe){for(var ge=Array(pe),_e=0;_e<pe;_e++)ge[_e]=arguments[_e+2];J.children=ge}if(P&&P.defaultProps)for(X in pe=P.defaultProps,pe)J[X]===void 0&&(J[X]=pe[X]);return{$$typeof:r,type:P,key:ne,ref:se,props:J,_owner:F.current}}function te(P,_){return{$$typeof:r,type:P.type,key:_,ref:P.ref,props:P.props,_owner:P._owner}}function K(P){return typeof P=="object"&&P!==null&&P.$$typeof===r}function z(P){var _={"=":"=0",":":"=2"};return"$"+P.replace(/[=:]/g,function(B){return _[B]})}var W=/\/+/g;function ae(P,_){return typeof P=="object"&&P!==null&&P.key!=null?z(""+P.key):_.toString(36)}function ee(P,_,B,X,J){var ne=typeof P;(ne==="undefined"||ne==="boolean")&&(P=null);var se=!1;if(P===null)se=!0;else switch(ne){case"string":case"number":se=!0;break;case"object":switch(P.$$typeof){case r:case n:se=!0}}if(se)return se=P,J=J(se),P=X===""?"."+ae(se,0):X,D(J)?(B="",P!=null&&(B=P.replace(W,"$&/")+"/"),ee(J,_,B,"",function(_e){return _e})):J!=null&&(K(J)&&(J=te(J,B+(!J.key||se&&se.key===J.key?"":(""+J.key).replace(W,"$&/")+"/")+P)),_.push(J)),1;if(se=0,X=X===""?".":X+":",D(P))for(var pe=0;pe<P.length;pe++){ne=P[pe];var ge=X+ae(ne,pe);se+=ee(ne,_,B,ge,J)}else if(ge=w(P),typeof ge=="function")for(P=ge.call(P),pe=0;!(ne=P.next()).done;)ne=ne.value,ge=X+ae(ne,pe++),se+=ee(ne,_,B,ge,J);else if(ne==="object")throw _=String(P),Error("Objects are not valid as a React child (found: "+(_==="[object Object]"?"object with keys {"+Object.keys(P).join(", ")+"}":_)+"). If you meant to render a collection of children, use an array instead.");return se}function he(P,_,B){if(P==null)return P;var X=[],J=0;return ee(P,X,"","",function(ne){return _.call(B,ne,J++)}),X}function Z(P){if(P._status===-1){var _=P._result;_=_(),_.then(function(B){(P._status===0||P._status===-1)&&(P._status=1,P._result=B)},function(B){(P._status===0||P._status===-1)&&(P._status=2,P._result=B)}),P._status===-1&&(P._status=0,P._result=_)}if(P._status===1)return P._result.default;throw P._result}var ce={current:null},O={transition:null},V={ReactCurrentDispatcher:ce,ReactCurrentBatchConfig:O,ReactCurrentOwner:F};function Y(){throw Error("act(...) is not supported in production builds of React.")}return Oe.Children={map:he,forEach:function(P,_,B){he(P,function(){_.apply(this,arguments)},B)},count:function(P){var _=0;return he(P,function(){_++}),_},toArray:function(P){return he(P,function(_){return _})||[]},only:function(P){if(!K(P))throw Error("React.Children.only expected to receive a single React element child.");return P}},Oe.Component=C,Oe.Fragment=s,Oe.Profiler=a,Oe.PureComponent=b,Oe.StrictMode=o,Oe.Suspense=p,Oe.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED=V,Oe.act=Y,Oe.cloneElement=function(P,_,B){if(P==null)throw Error("React.cloneElement(...): The argument must be a React element, but you passed "+P+".");var X=k({},P.props),J=P.key,ne=P.ref,se=P._owner;if(_!=null){if(_.ref!==void 0&&(ne=_.ref,se=F.current),_.key!==void 0&&(J=""+_.key),P.type&&P.type.defaultProps)var pe=P.type.defaultProps;for(ge in _)L.call(_,ge)&&!H.hasOwnProperty(ge)&&(X[ge]=_[ge]===void 0&&pe!==void 0?pe[ge]:_[ge])}var ge=arguments.length-2;if(ge===1)X.children=B;else if(1<ge){pe=Array(ge);for(var _e=0;_e<ge;_e++)pe[_e]=arguments[_e+2];X.children=pe}return{$$typeof:r,type:P.type,key:J,ref:ne,props:X,_owner:se}},Oe.createContext=function(P){return P={$$typeof:f,_currentValue:P,_currentValue2:P,_threadCount:0,Provider:null,Consumer:null,_defaultValue:null,_globalName:null},P.Provider={$$typeof:u,_context:P},P.Consumer=P},Oe.createElement=q,Oe.createFactory=function(P){var _=q.bind(null,P);return _.type=P,_},Oe.createRef=function(){return{current:null}},Oe.forwardRef=function(P){return{$$typeof:c,render:P}},Oe.isValidElement=K,Oe.lazy=function(P){return{$$typeof:y,_payload:{_status:-1,_result:P},_init:Z}},Oe.memo=function(P,_){return{$$typeof:g,type:P,compare:_===void 0?null:_}},Oe.startTransition=function(P){var _=O.transition;O.transition={};try{P()}finally{O.transition=_}},Oe.unstable_act=Y,Oe.useCallback=function(P,_){return ce.current.useCallback(P,_)},Oe.useContext=function(P){return ce.current.useContext(P)},Oe.useDebugValue=function(){},Oe.useDeferredValue=function(P){return ce.current.useDeferredValue(P)},Oe.useEffect=function(P,_){return ce.current.useEffect(P,_)},Oe.useId=function(){return ce.current.useId()},Oe.useImperativeHandle=function(P,_,B){return ce.current.useImperativeHandle(P,_,B)},Oe.useInsertionEffect=function(P,_){return ce.current.useInsertionEffect(P,_)},Oe.useLayoutEffect=function(P,_){return ce.current.useLayoutEffect(P,_)},Oe.useMemo=function(P,_){return ce.current.useMemo(P,_)},Oe.useReducer=function(P,_,B){return ce.current.useReducer(P,_,B)},Oe.useRef=function(P){return ce.current.useRef(P)},Oe.useState=function(P){return ce.current.useState(P)},Oe.useSyncExternalStore=function(P,_,B){return ce.current.useSyncExternalStore(P,_,B)},Oe.useTransition=function(){return ce.current.useTransition()},Oe.version="18.3.1",Oe}var uf;function ac(){return uf||(uf=1,Pl.exports=Sg()),Pl.exports}var df;function Ng(){if(df)return Ys;df=1;var r=ac(),n=Symbol.for("react.element"),s=Symbol.for("react.fragment"),o=Object.prototype.hasOwnProperty,a=r.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentOwner,u={key:!0,ref:!0,__self:!0,__source:!0};function f(c,p,g){var y,v={},w=null,S=null;g!==void 0&&(w=""+g),p.key!==void 0&&(w=""+p.key),p.ref!==void 0&&(S=p.ref);for(y in p)o.call(p,y)&&!u.hasOwnProperty(y)&&(v[y]=p[y]);if(c&&c.defaultProps)for(y in p=c.defaultProps,p)v[y]===void 0&&(v[y]=p[y]);return{$$typeof:n,type:c,key:w,ref:S,props:v,_owner:a.current}}return Ys.Fragment=s,Ys.jsx=f,Ys.jsxs=f,Ys}var ff;function _g(){return ff||(ff=1,Ml.exports=Ng()),Ml.exports}var h=_g(),go={},Tl={exports:{}},Dt={},Al={exports:{}},Ll={};var pf;function Eg(){return pf||(pf=1,(function(r){function n(O,V){var Y=O.length;O.push(V);e:for(;0<Y;){var P=Y-1>>>1,_=O[P];if(0<a(_,V))O[P]=V,O[Y]=_,Y=P;else break e}}function s(O){return O.length===0?null:O[0]}function o(O){if(O.length===0)return null;var V=O[0],Y=O.pop();if(Y!==V){O[0]=Y;e:for(var P=0,_=O.length,B=_>>>1;P<B;){var X=2*(P+1)-1,J=O[X],ne=X+1,se=O[ne];if(0>a(J,Y))ne<_&&0>a(se,J)?(O[P]=se,O[ne]=Y,P=ne):(O[P]=J,O[X]=Y,P=X);else if(ne<_&&0>a(se,Y))O[P]=se,O[ne]=Y,P=ne;else break e}}return V}function a(O,V){var Y=O.sortIndex-V.sortIndex;return Y!==0?Y:O.id-V.id}if(typeof performance=="object"&&typeof performance.now=="function"){var u=performance;r.unstable_now=function(){return u.now()}}else{var f=Date,c=f.now();r.unstable_now=function(){return f.now()-c}}var p=[],g=[],y=1,v=null,w=3,S=!1,k=!1,E=!1,C=typeof setTimeout=="function"?setTimeout:null,I=typeof clearTimeout=="function"?clearTimeout:null,b=typeof setImmediate<"u"?setImmediate:null;typeof navigator<"u"&&navigator.scheduling!==void 0&&navigator.scheduling.isInputPending!==void 0&&navigator.scheduling.isInputPending.bind(navigator.scheduling);function M(O){for(var V=s(g);V!==null;){if(V.callback===null)o(g);else if(V.startTime<=O)o(g),V.sortIndex=V.expirationTime,n(p,V);else break;V=s(g)}}function D(O){if(E=!1,M(O),!k)if(s(p)!==null)k=!0,Z(L);else{var V=s(g);V!==null&&ce(D,V.startTime-O)}}function L(O,V){k=!1,E&&(E=!1,I(q),q=-1),S=!0;var Y=w;try{for(M(V),v=s(p);v!==null&&(!(v.expirationTime>V)||O&&!z());){var P=v.callback;if(typeof P=="function"){v.callback=null,w=v.priorityLevel;var _=P(v.expirationTime<=V);V=r.unstable_now(),typeof _=="function"?v.callback=_:v===s(p)&&o(p),M(V)}else o(p);v=s(p)}if(v!==null)var B=!0;else{var X=s(g);X!==null&&ce(D,X.startTime-V),B=!1}return B}finally{v=null,w=Y,S=!1}}var F=!1,H=null,q=-1,te=5,K=-1;function z(){return!(r.unstable_now()-K<te)}function W(){if(H!==null){var O=r.unstable_now();K=O;var V=!0;try{V=H(!0,O)}finally{V?ae():(F=!1,H=null)}}else F=!1}var ae;if(typeof b=="function")ae=function(){b(W)};else if(typeof MessageChannel<"u"){var ee=new MessageChannel,he=ee.port2;ee.port1.onmessage=W,ae=function(){he.postMessage(null)}}else ae=function(){C(W,0)};function Z(O){H=O,F||(F=!0,ae())}function ce(O,V){q=C(function(){O(r.unstable_now())},V)}r.unstable_IdlePriority=5,r.unstable_ImmediatePriority=1,r.unstable_LowPriority=4,r.unstable_NormalPriority=3,r.unstable_Profiling=null,r.unstable_UserBlockingPriority=2,r.unstable_cancelCallback=function(O){O.callback=null},r.unstable_continueExecution=function(){k||S||(k=!0,Z(L))},r.unstable_forceFrameRate=function(O){0>O||125<O?console.error("forceFrameRate takes a positive int between 0 and 125, forcing frame rates higher than 125 fps is not supported"):te=0<O?Math.floor(1e3/O):5},r.unstable_getCurrentPriorityLevel=function(){return w},r.unstable_getFirstCallbackNode=function(){return s(p)},r.unstable_next=function(O){switch(w){case 1:case 2:case 3:var V=3;break;default:V=w}var Y=w;w=V;try{return O()}finally{w=Y}},r.unstable_pauseExecution=function(){},r.unstable_requestPaint=function(){},r.unstable_runWithPriority=function(O,V){switch(O){case 1:case 2:case 3:case 4:case 5:break;default:O=3}var Y=w;w=O;try{return V()}finally{w=Y}},r.unstable_scheduleCallback=function(O,V,Y){var P=r.unstable_now();switch(typeof Y=="object"&&Y!==null?(Y=Y.delay,Y=typeof Y=="number"&&0<Y?P+Y:P):Y=P,O){case 1:var _=-1;break;case 2:_=250;break;case 5:_=1073741823;break;case 4:_=1e4;break;default:_=5e3}return _=Y+_,O={id:y++,callback:V,priorityLevel:O,startTime:Y,expirationTime:_,sortIndex:-1},Y>P?(O.sortIndex=Y,n(g,O),s(p)===null&&O===s(g)&&(E?(I(q),q=-1):E=!0,ce(D,Y-P))):(O.sortIndex=_,n(p,O),k||S||(k=!0,Z(L))),O},r.unstable_shouldYield=z,r.unstable_wrapCallback=function(O){var V=w;return function(){var Y=w;w=V;try{return O.apply(this,arguments)}finally{w=Y}}}})(Ll)),Ll}var hf;function Cg(){return hf||(hf=1,Al.exports=Eg()),Al.exports}var mf;function Ig(){if(mf)return Dt;mf=1;var r=ac(),n=Cg();function s(e){for(var t="https://reactjs.org/docs/error-decoder.html?invariant="+e,i=1;i<arguments.length;i++)t+="&args[]="+encodeURIComponent(arguments[i]);return"Minified React error #"+e+"; visit "+t+" for the full message or use the non-minified dev environment for full errors and additional helpful warnings."}var o=new Set,a={};function u(e,t){f(e,t),f(e+"Capture",t)}function f(e,t){for(a[e]=t,e=0;e<t.length;e++)o.add(t[e])}var c=!(typeof window>"u"||typeof window.document>"u"||typeof window.document.createElement>"u"),p=Object.prototype.hasOwnProperty,g=/^[:A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD][:A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\-.0-9\u00B7\u0300-\u036F\u203F-\u2040]*$/,y={},v={};function w(e){return p.call(v,e)?!0:p.call(y,e)?!1:g.test(e)?v[e]=!0:(y[e]=!0,!1)}function S(e,t,i,l){if(i!==null&&i.type===0)return!1;switch(typeof t){case"function":case"symbol":return!0;case"boolean":return l?!1:i!==null?!i.acceptsBooleans:(e=e.toLowerCase().slice(0,5),e!=="data-"&&e!=="aria-");default:return!1}}function k(e,t,i,l){if(t===null||typeof t>"u"||S(e,t,i,l))return!0;if(l)return!1;if(i!==null)switch(i.type){case 3:return!t;case 4:return t===!1;case 5:return isNaN(t);case 6:return isNaN(t)||1>t}return!1}function E(e,t,i,l,d,m,x){this.acceptsBooleans=t===2||t===3||t===4,this.attributeName=l,this.attributeNamespace=d,this.mustUseProperty=i,this.propertyName=e,this.type=t,this.sanitizeURL=m,this.removeEmptyString=x}var C={};"children dangerouslySetInnerHTML defaultValue defaultChecked innerHTML suppressContentEditableWarning suppressHydrationWarning style".split(" ").forEach(function(e){C[e]=new E(e,0,!1,e,null,!1,!1)}),[["acceptCharset","accept-charset"],["className","class"],["htmlFor","for"],["httpEquiv","http-equiv"]].forEach(function(e){var t=e[0];C[t]=new E(t,1,!1,e[1],null,!1,!1)}),["contentEditable","draggable","spellCheck","value"].forEach(function(e){C[e]=new E(e,2,!1,e.toLowerCase(),null,!1,!1)}),["autoReverse","externalResourcesRequired","focusable","preserveAlpha"].forEach(function(e){C[e]=new E(e,2,!1,e,null,!1,!1)}),"allowFullScreen async autoFocus autoPlay controls default defer disabled disablePictureInPicture disableRemotePlayback formNoValidate hidden loop noModule noValidate open playsInline readOnly required reversed scoped seamless itemScope".split(" ").forEach(function(e){C[e]=new E(e,3,!1,e.toLowerCase(),null,!1,!1)}),["checked","multiple","muted","selected"].forEach(function(e){C[e]=new E(e,3,!0,e,null,!1,!1)}),["capture","download"].forEach(function(e){C[e]=new E(e,4,!1,e,null,!1,!1)}),["cols","rows","size","span"].forEach(function(e){C[e]=new E(e,6,!1,e,null,!1,!1)}),["rowSpan","start"].forEach(function(e){C[e]=new E(e,5,!1,e.toLowerCase(),null,!1,!1)});var I=/[\-:]([a-z])/g;function b(e){return e[1].toUpperCase()}"accent-height alignment-baseline arabic-form baseline-shift cap-height clip-path clip-rule color-interpolation color-interpolation-filters color-profile color-rendering dominant-baseline enable-background fill-opacity fill-rule flood-color flood-opacity font-family font-size font-size-adjust font-stretch font-style font-variant font-weight glyph-name glyph-orientation-horizontal glyph-orientation-vertical horiz-adv-x horiz-origin-x image-rendering letter-spacing lighting-color marker-end marker-mid marker-start overline-position overline-thickness paint-order panose-1 pointer-events rendering-intent shape-rendering stop-color stop-opacity strikethrough-position strikethrough-thickness stroke-dasharray stroke-dashoffset stroke-linecap stroke-linejoin stroke-miterlimit stroke-opacity stroke-width text-anchor text-decoration text-rendering underline-position underline-thickness unicode-bidi unicode-range units-per-em v-alphabetic v-hanging v-ideographic v-mathematical vector-effect vert-adv-y vert-origin-x vert-origin-y word-spacing writing-mode xmlns:xlink x-height".split(" ").forEach(function(e){var t=e.replace(I,b);C[t]=new E(t,1,!1,e,null,!1,!1)}),"xlink:actuate xlink:arcrole xlink:role xlink:show xlink:title xlink:type".split(" ").forEach(function(e){var t=e.replace(I,b);C[t]=new E(t,1,!1,e,"http://www.w3.org/1999/xlink",!1,!1)}),["xml:base","xml:lang","xml:space"].forEach(function(e){var t=e.replace(I,b);C[t]=new E(t,1,!1,e,"http://www.w3.org/XML/1998/namespace",!1,!1)}),["tabIndex","crossOrigin"].forEach(function(e){C[e]=new E(e,1,!1,e.toLowerCase(),null,!1,!1)}),C.xlinkHref=new E("xlinkHref",1,!1,"xlink:href","http://www.w3.org/1999/xlink",!0,!1),["src","href","action","formAction"].forEach(function(e){C[e]=new E(e,1,!1,e.toLowerCase(),null,!0,!0)});function M(e,t,i,l){var d=C.hasOwnProperty(t)?C[t]:null;(d!==null?d.type!==0:l||!(2<t.length)||t[0]!=="o"&&t[0]!=="O"||t[1]!=="n"&&t[1]!=="N")&&(k(t,i,d,l)&&(i=null),l||d===null?w(t)&&(i===null?e.removeAttribute(t):e.setAttribute(t,""+i)):d.mustUseProperty?e[d.propertyName]=i===null?d.type===3?!1:"":i:(t=d.attributeName,l=d.attributeNamespace,i===null?e.removeAttribute(t):(d=d.type,i=d===3||d===4&&i===!0?"":""+i,l?e.setAttributeNS(l,t,i):e.setAttribute(t,i))))}var D=r.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,L=Symbol.for("react.element"),F=Symbol.for("react.portal"),H=Symbol.for("react.fragment"),q=Symbol.for("react.strict_mode"),te=Symbol.for("react.profiler"),K=Symbol.for("react.provider"),z=Symbol.for("react.context"),W=Symbol.for("react.forward_ref"),ae=Symbol.for("react.suspense"),ee=Symbol.for("react.suspense_list"),he=Symbol.for("react.memo"),Z=Symbol.for("react.lazy"),ce=Symbol.for("react.offscreen"),O=Symbol.iterator;function V(e){return e===null||typeof e!="object"?null:(e=O&&e[O]||e["@@iterator"],typeof e=="function"?e:null)}var Y=Object.assign,P;function _(e){if(P===void 0)try{throw Error()}catch(i){var t=i.stack.trim().match(/\n( *(at )?)/);P=t&&t[1]||""}return`
 `+P+e}var B=!1;function X(e,t){if(!e||B)return"";B=!0;var i=Error.prepareStackTrace;Error.prepareStackTrace=void 0;try{if(t)if(t=function(){throw Error()},Object.defineProperty(t.prototype,"props",{set:function(){throw Error()}}),typeof Reflect=="object"&&Reflect.construct){try{Reflect.construct(t,[])}catch(G){var l=G}Reflect.construct(e,[],t)}else{try{t.call()}catch(G){l=G}e.call(t.prototype)}else{try{throw Error()}catch(G){l=G}e()}}catch(G){if(G&&l&&typeof G.stack=="string"){for(var d=G.stack.split(`
 `),m=l.stack.split(`
@@ -255,6 +493,133 @@ ${a}
 
 <body>
   <div id="root"></div>
+
+  <!-- Raw text viewer/editor (shows original model text including tags) -->
+  <button id="v2o-rawtext-fab" type="button" title="展示/修改原始文本（含 tag）">原始文本</button>
+  <div id="v2o-rawtext-overlay" data-open="false" aria-hidden="true">
+    <div id="v2o-rawtext-dialog" role="dialog" aria-modal="true" aria-label="原始文本">
+      <div class="v2o-rawtext-header">
+        <div class="v2o-rawtext-title">原始文本（含各種 tag）</div>
+        <button id="v2o-rawtext-close" type="button" aria-label="關閉">×</button>
+      </div>
+      <textarea id="v2o-rawtext-area" spellcheck="false"></textarea>
+      <div class="v2o-rawtext-actions">
+        <button id="v2o-rawtext-apply" class="v2o-rawtext-btn v2o-rawtext-btn--primary" type="button">
+          套用修改
+        </button>
+        <button id="v2o-rawtext-reset" class="v2o-rawtext-btn" type="button">重載最新接收</button>
+        <button id="v2o-rawtext-copy" class="v2o-rawtext-btn" type="button">複製</button>
+      </div>
+      <div class="v2o-rawtext-hint">
+        這裡顯示的是「原始接收到的模型文本」（通常含 tag），不會被 next_action 的切割邏輯影響。
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const state = (window.__V2O_RAW_TEXT__ = window.__V2O_RAW_TEXT__ ?? {
+        enabled: true,
+        lastCapturedRawText: "",
+        lastRawText: "",
+        lastRawJson: null,
+        lastUpdatedAt: 0,
+      });
+
+      const overlay = document.getElementById("v2o-rawtext-overlay");
+      const fab = document.getElementById("v2o-rawtext-fab");
+      const closeBtn = document.getElementById("v2o-rawtext-close");
+      const applyBtn = document.getElementById("v2o-rawtext-apply");
+      const resetBtn = document.getElementById("v2o-rawtext-reset");
+      const copyBtn = document.getElementById("v2o-rawtext-copy");
+      const area = document.getElementById("v2o-rawtext-area");
+
+      const setOpen = (open) => {
+        overlay.dataset.open = open ? "true" : "false";
+        overlay.setAttribute("aria-hidden", open ? "false" : "true");
+        if (open) {
+          area.value = state.lastRawText || state.lastCapturedRawText || "";
+          setTimeout(() => area.focus(), 0);
+        }
+      };
+
+      const notify = () => {
+        try {
+          window.dispatchEvent(new CustomEvent("v2o:raw-update", { detail: { ...state } }));
+        } catch {
+          // ignore
+        }
+      };
+
+      fab.addEventListener("click", () => setOpen(true));
+      closeBtn.addEventListener("click", () => setOpen(false));
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) setOpen(false);
+      });
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && overlay.dataset.open === "true") setOpen(false);
+      });
+
+      applyBtn.addEventListener("click", () => {
+        state.lastRawText = area.value ?? "";
+        state.lastUpdatedAt = Date.now();
+        notify();
+      });
+
+      resetBtn.addEventListener("click", () => {
+        state.lastRawText = state.lastCapturedRawText || "";
+        state.lastUpdatedAt = Date.now();
+        area.value = state.lastRawText;
+        notify();
+      });
+
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(area.value ?? "");
+          copyBtn.textContent = "已複製";
+          setTimeout(() => (copyBtn.textContent = "複製"), 900);
+        } catch {
+          // fallback
+          area.select();
+          document.execCommand("copy");
+        }
+      });
+
+      // Keep textarea synced when new responses arrive
+      window.addEventListener("v2o:raw-update", () => {
+        if (overlay.dataset.open === "true") {
+          // Only auto-refresh if user didn't start editing this open panel.
+          // (Heuristic: if textarea equals old captured or old raw, refresh; otherwise keep edits.)
+          const current = area.value ?? "";
+          const next = state.lastRawText || state.lastCapturedRawText || "";
+          if (current === "" || current === next) {
+            area.value = next;
+          }
+        }
+      });
+
+      // Try to add an inline button next to existing main-text action buttons (if present).
+      const ensureInlineButton = () => {
+        const actions = document.querySelector(".main-text-actions");
+        if (!actions) return;
+        if (actions.querySelector("#v2o-rawtext-inline-btn")) return;
+
+        const btn = document.createElement("button");
+        btn.id = "v2o-rawtext-inline-btn";
+        btn.type = "button";
+        btn.className = "main-text-action-button main-text-action-button--edit";
+        btn.title = "原始文本（含 tag）";
+        btn.innerHTML =
+          '<svg class="main-text-action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 3h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 3l-9 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        btn.addEventListener("click", () => setOpen(true));
+        actions.appendChild(btn);
+      };
+
+      ensureInlineButton();
+      const mo = new MutationObserver(() => ensureInlineButton());
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+    })();
+  </script>
 </body>
 
 </html>
