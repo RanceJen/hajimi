@@ -18206,7 +18206,7 @@ ${u}`
           return (q && (g.societyPanel = q), g);
         }
       }
-      const pv = 10;
+      const pv = 6;
       class hv {
         constructor(n = pv) {
           this.defaultCount = n;
@@ -18878,17 +18878,20 @@ ${u}`
       function Tv(r, n, s, o) {
         const a = Math.max(0, n),
           u = Math.max(0, r.length - a),
+          lastTurnNum = r.length.toString().padStart(2, "0"),
           c = [
             "<chat_history>",
             ...r.map((g, y) => {
               const v = `turn_${(y + 1).toString().padStart(2, "0")}`,
+                shouldUseFullContent = y >= u, 
                 S =
-                  (y >= u ? g.storyContent : g.summary) || g.storyContent || "",
+                  (shouldUseFullContent ? g.storyContent : g.summary) || g.storyContent || "",
                 k = g.userChoice?.trim() || "（无输入）";
               return [`## ${v}`, `**user**: ${k}`, `**game**: ${S}`, "---"]
                 .join(`
 `);
             }),
+            `根据 <user_input> 从 turn_${lastTurnNum} 的结尾继续描写剧情吧!`,
             "</chat_history>",
           ].join(`
 `);
