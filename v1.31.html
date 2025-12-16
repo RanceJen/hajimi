@@ -16670,47 +16670,82 @@ Error generating stack: ` +
                                                   Z.key,
                                                 )
                                               : h.jsxs(
-                                                  "button",
+                                                  "div",
                                                   {
-                                                    className: xe(
-                                                      Z.className,
-                                                      V &&
-                                                        "option-bubble--active",
-                                                      V &&
-                                                        Y &&
-                                                        "option-bubble--floating",
-                                                      !V &&
-                                                        Y &&
-                                                        "option-bubble--locked",
-                                                    ),
-                                                    type: "button",
-                                                    disabled: W || te,
-                                                    onClick: () => {
-                                                      W || te || p(O, Z.key);
-                                                    },
+                                                    style: { position: "relative", display: "flex", justifyContent: "center" },
                                                     children: [
+                                                      h.jsxs(
+                                                        "button",
+                                                        {
+                                                          className: xe(
+                                                            Z.className,
+                                                            V &&
+                                                              "option-bubble--active",
+                                                            V &&
+                                                              Y &&
+                                                              "option-bubble--floating",
+                                                            !V &&
+                                                              Y &&
+                                                              "option-bubble--locked",
+                                                          ),
+                                                          type: "button",
+                                                          disabled: W || te,
+                                                          onClick: () => {
+                                                            W || te || p(O, Z.key);
+                                                          },
+                                                          children: [
+                                                            h.jsx("div", {
+                                                              className:
+                                                                "option-bubble__progress",
+                                                              "aria-hidden": !0,
+                                                              children: h.jsx("div", {
+                                                                className:
+                                                                  "option-bubble__progress-fill",
+                                                                style: P,
+                                                              }),
+                                                            }),
+                                                            h.jsx("div", {
+                                                              className: xe(
+                                                                "option-bubble__content",
+                                                                n,
+                                                              ),
+                                                              children: h.jsx(
+                                                                "span",
+                                                                {
+                                                                  className:
+                                                                    "inline-block relative z-10",
+                                                                  children: O,
+                                                                },
+                                                              ),
+                                                            }),
+                                                          ],
+                                                        },
+                                                      ),
                                                       h.jsx("div", {
                                                         className: "option-debug-btn",
                                                         style: {
                                                           position: "absolute",
-                                                          right: "-6px",
-                                                          top: "-6px",
-                                                          width: "18px",
-                                                          height: "18px",
+                                                          right: "-12px",
+                                                          top: "-12px",
+                                                          width: "24px",
+                                                          height: "24px",
                                                           borderRadius: "50%",
-                                                          background: "rgba(255,255,255,0.9)",
-                                                          border: "1px solid #999",
+                                                          background: "#ef4444",
+                                                          border: "2px solid #fff",
+                                                          boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
                                                           display: "flex",
                                                           alignItems: "center",
                                                           justifyContent: "center",
                                                           cursor: "pointer",
-                                                          zIndex: 50,
-                                                          color: "#666",
-                                                          opacity: 0.6
+                                                          zIndex: 100,
+                                                          color: "#fff",
+                                                          opacity: 0.9,
+                                                          fontSize: "14px",
+                                                          fontWeight: "bold"
                                                         },
                                                         title: "Debug: Log Prompt",
                                                         onMouseEnter: (e) => e.currentTarget.style.opacity = 1,
-                                                        onMouseLeave: (e) => e.currentTarget.style.opacity = 0.6,
+                                                        onMouseLeave: (e) => e.currentTarget.style.opacity = 0.9,
                                                         onClick: async (e) => {
                                                             e.stopPropagation();
                                                             try {
@@ -16728,39 +16763,9 @@ The user's latest choice is: ->[${O}]<-, please proceed with the story according
                                                                 console.error("Debug prompt failed", err);
                                                             }
                                                         },
-                                                        children: h.jsx("svg", {
-                                                            width: "10",
-                                                            height: "10",
-                                                            viewBox: "0 0 24 24",
-                                                            fill: "currentColor",
-                                                            children: h.jsx("path", { d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" })
-                                                        })
-                                                      }),
-                                                      h.jsx("div", {
-                                                        className:
-                                                          "option-bubble__progress",
-                                                        "aria-hidden": !0,
-                                                        children: h.jsx("div", {
-                                                          className:
-                                                            "option-bubble__progress-fill",
-                                                          style: P,
-                                                        }),
-                                                      }),
-                                                      h.jsx("div", {
-                                                        className: xe(
-                                                          "option-bubble__content",
-                                                          n,
-                                                        ),
-                                                        children: h.jsx(
-                                                          "span",
-                                                          {
-                                                            className:
-                                                              "inline-block relative z-10",
-                                                            children: O,
-                                                          },
-                                                        ),
-                                                      }),
-                                                    ],
+                                                        children: "!"
+                                                      })
+                                                    ]
                                                   },
                                                   Z.key,
                                                 );
